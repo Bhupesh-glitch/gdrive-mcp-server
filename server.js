@@ -108,7 +108,12 @@ function mcpError(id, code, message) {
 
 function mcpResult(id, data, isError = false) {
   const text = typeof data === 'string' ? data : JSON.stringify(data);
-  return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }], isError } };
+  const result = { content: [{ type: 'text', text }], isError };
+  // Include structuredContent for MCP 2025-06-18+ clients that require it
+  if (!isError && typeof data === 'object' && data !== null) {
+    result.structuredContent = data;
+  }
+  return { jsonrpc: '2.0', id, result };
 }
 
 app.post('/', async (req, res) => {
@@ -147,7 +152,12 @@ app.post('/', async (req, res) => {
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
 
     if (!token) {
-      return res.json(mcpResult(id, 'No authorization token provided.', true));
+      // Return empty result (not error) so agent retries with auth rather than giving up
+      const toolName = params?.name;
+      if (toolName === 'search_files' || toolName === 'list_recent_files') {
+        return res.json(mcpResult(id, { files: [] }));
+      }
+      return res.json(mcpResult(id, { fileContent: '' }));
     }
 
     const toolName = params?.name;

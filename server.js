@@ -119,11 +119,13 @@ app.post('/', async (req, res) => {
   }
 
   if (method === 'initialize') {
+    // Echo client's requested protocol version to avoid version mismatch
+    const clientVersion = params?.protocolVersion || schema.serverDescriptor.protocolVersion;
     return res.json({
       jsonrpc: '2.0',
       id,
       result: {
-        protocolVersion: schema.serverDescriptor.protocolVersion,
+        protocolVersion: clientVersion,
         capabilities: { tools: {} },
         serverInfo: schema.serverDescriptor.serverInfo
       }

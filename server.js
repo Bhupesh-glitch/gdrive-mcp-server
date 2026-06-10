@@ -1,109 +1,18 @@
 import express from 'express';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const schema = JSON.parse(readFileSync(join(__dirname, 'tools.json'), 'utf8'));
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-const TOOLS = [
-  {
-    name: 'search_files',
-    description: 'Search for Drive files using a structured query.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'The search query (e.g. "title contains \'hello\'")" },
-        pageSize: { type: 'integer', format: 'int32', description: 'Max results per page' },
-        pageToken: { type: 'string', description: 'Pagination token' },
-        excludeContentSnippets: { type: 'boolean' }
-      }
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        files: { type: 'array', items: { $ref: '#/$defs/File' } },
-        nextPageToken: { type: 'string' }
-      },
-      $defs: { File: fileSchema() }
-    },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-  },
-  {
-    name: 'list_recent_files',
-    description: 'List the most recently modified files in Google Drive.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        pageSize: { type: 'integer', format: 'int32', description: 'Max results' },
-        pageToken: { type: 'string' },
-        orderBy: { type: 'string', description: 'Sort order: recency, lastModified, lastModifiedByMe' },
-        excludeContentSnippets: { type: 'boolean' }
-      }
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        files: { type: 'array', items: { $ref: '#/$defs/File' } },
-        nextPageToken: { type: 'string' }
-      },
-      $defs: { File: fileSchema() }
-    },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-  },
-  {
-    name: 'read_file_content',
-    description: 'Read the text content of a Google Drive file by its ID.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        fileId: { type: 'string', description: 'Required. The ID of the file to retrieve.' }
-      },
-      required: ['fileId']
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        fileContent: { type: 'string', description: 'Drive file content in text format.' }
-      }
-    },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-  },
-  {
-    name: 'get_file_metadata',
-    description: 'Get metadata about a Google Drive file.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        fileId: { type: 'string', description: 'Required. The ID of the file.' },
-        excludeContentSnippets: { type: 'boolean' }
-      },
-      required: ['fileId']
-    },
-    outputSchema: { type: 'object', properties: fileSchema().properties, $defs: {} },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-  }
-];
-
-function fileSchema() {
-  return {
-    type: 'object',
-    description: 'A file resource.',
-    properties: {
-      id: { type: 'string' },
-      title: { type: 'string' },
-      mimeType: { type: 'string' },
-      modifiedTime: { type: 'string', format: 'date-time' },
-      createdTime: { type: 'string', format: 'date-time' },
-      viewUrl: { type: 'string' },
-      owner: { type: 'string' },
-      fileSize: { type: 'string' },
-      fileExtension: { type: 'string' },
-      parentId: { type: 'string' },
-      description: { type: 'string' },
-      contentSnippet: { type: 'string' }
-    }
-  };
-}
+// Use the exact tool definitions stored in Salesforce ESR
+const TOOLS = schema.tools;
 
 async function driveRequest(path, token) {
   const res = await fetch(`https://www.googleapis.com/drive/v3/${path}`, {
@@ -125,18 +34,20 @@ function mapFile(f) {
     createdTime: f.createdTime,
     viewUrl: f.webViewLink,
     owner: f.owners?.[0]?.emailAddress,
-    fileSize: f.size,
+    fileSize: f.size ? String(f.size) : undefined,
     fileExtension: f.fileExtension,
     parentId: f.parents?.[0],
     description: f.description,
-    contentSnippet: undefined
+    canAddChildren: false
   };
 }
+
+const FILE_FIELDS = 'id,name,mimeType,modifiedTime,createdTime,webViewLink,owners,size,fileExtension,parents,description';
 
 async function searchFiles(token, query, pageSize = 10, pageToken) {
   const q = query ? `&q=${encodeURIComponent(query)}` : '';
   const pt = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
-  const fields = encodeURIComponent('nextPageToken,files(id,name,mimeType,modifiedTime,createdTime,webViewLink,owners,size,fileExtension,parents,description)');
+  const fields = encodeURIComponent(`nextPageToken,files(${FILE_FIELDS})`);
   const data = await driveRequest(
     `files?pageSize=${pageSize}&fields=${fields}&orderBy=modifiedTime%20desc${q}${pt}`,
     token
@@ -145,11 +56,11 @@ async function searchFiles(token, query, pageSize = 10, pageToken) {
 }
 
 async function listRecentFiles(token, pageSize = 10, orderBy, pageToken) {
-  const sortField = orderBy === 'lastModified' ? 'modifiedTime' : orderBy === 'lastModifiedByMe' ? 'modifiedByMeTime' : 'modifiedTime';
+  const sort = orderBy === 'lastModifiedByMe' ? 'modifiedByMeTime' : 'modifiedTime';
   const pt = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
-  const fields = encodeURIComponent('nextPageToken,files(id,name,mimeType,modifiedTime,createdTime,webViewLink,owners,size,fileExtension,parents,description)');
+  const fields = encodeURIComponent(`nextPageToken,files(${FILE_FIELDS})`);
   const data = await driveRequest(
-    `files?pageSize=${pageSize}&fields=${fields}&orderBy=${sortField}%20desc${pt}`,
+    `files?pageSize=${pageSize}&fields=${fields}&orderBy=${sort}%20desc${pt}`,
     token
   );
   return { files: (data.files || []).map(mapFile), nextPageToken: data.nextPageToken };
@@ -158,7 +69,6 @@ async function listRecentFiles(token, pageSize = 10, orderBy, pageToken) {
 async function readFileContent(token, fileId) {
   const meta = await driveRequest(`files/${fileId}?fields=name,mimeType`, token);
   const mime = meta.mimeType || '';
-
   if (mime.includes('google-apps.document')) {
     const res = await fetch(
       `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text%2Fplain`,
@@ -175,13 +85,21 @@ async function readFileContent(token, fileId) {
     if (!res.ok) throw new Error(`Download failed: ${res.status}`);
     return { fileContent: await res.text() };
   }
-  return { fileContent: `File "${meta.name}" is of type ${mime} — text extraction not supported.` };
+  return { fileContent: `File "${meta.name}" is of type ${mime} — text extraction not supported for this format.` };
 }
 
 async function getFileMetadata(token, fileId) {
-  const fields = encodeURIComponent('id,name,mimeType,modifiedTime,createdTime,webViewLink,owners,size,fileExtension,parents,description');
+  const fields = encodeURIComponent(FILE_FIELDS);
   const f = await driveRequest(`files/${fileId}?fields=${fields}`, token);
   return mapFile(f);
+}
+
+async function getFilePermissions(token, fileId) {
+  const data = await driveRequest(
+    `files/${fileId}/permissions?fields=${encodeURIComponent('permissions(id,role,type,emailAddress,displayName,view)')}`,
+    token
+  );
+  return { permissions: data.permissions || [] };
 }
 
 function mcpError(id, code, message) {
@@ -205,9 +123,9 @@ app.post('/', async (req, res) => {
       jsonrpc: '2.0',
       id,
       result: {
-        protocolVersion: '2025-11-25',
+        protocolVersion: schema.serverDescriptor.protocolVersion,
         capabilities: { tools: {} },
-        serverInfo: { name: 'gdrive-mcp', version: '1.0.0' }
+        serverInfo: schema.serverDescriptor.serverInfo
       }
     });
   }
@@ -225,7 +143,7 @@ app.post('/', async (req, res) => {
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
 
     if (!token) {
-      return res.json(mcpResult(id, 'No authorization token provided. Please authenticate with Google first.', true));
+      return res.json(mcpResult(id, 'No authorization token provided.', true));
     }
 
     const toolName = params?.name;
@@ -241,6 +159,10 @@ app.post('/', async (req, res) => {
         result = await readFileContent(token, args.fileId);
       } else if (toolName === 'get_file_metadata') {
         result = await getFileMetadata(token, args.fileId);
+      } else if (toolName === 'get_file_permissions') {
+        result = await getFilePermissions(token, args.fileId);
+      } else if (toolName === 'copy_file' || toolName === 'create_file' || toolName === 'download_file_content') {
+        return res.json(mcpResult(id, `Tool ${toolName} is not supported in this read-only implementation.`, true));
       } else {
         return res.json(mcpError(id, -32601, `Unknown tool: ${toolName}`));
       }

@@ -112,7 +112,9 @@ function mcpResult(id, data, isError = false) {
 }
 
 app.post('/', async (req, res) => {
-  const { jsonrpc, id, method, params } = req.body || {};
+  const body = req.body || {};
+  console.log('INCOMING:', JSON.stringify({ method: body.method, params: body.params, headers: { authorization: req.headers.authorization ? 'Bearer ***' : 'NONE' } }));
+  const { jsonrpc, id, method, params } = body;
 
   if (jsonrpc !== '2.0') {
     return res.status(400).json(mcpError(id, -32600, 'Invalid JSON-RPC'));

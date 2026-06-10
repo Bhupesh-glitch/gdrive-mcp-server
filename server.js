@@ -15,29 +15,39 @@ const PORT = process.env.PORT || 3000;
 const TOOLS = schema.tools;
 
 async function driveRequest(path, token) {
-  const res = await fetch(`https://www.googleapis.com/drive/v3/${path}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Drive API ${res.status}: ${body.slice(0, 300)}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.log('Drive API error:', res.status, body.slice(0, 500));
+      throw new Error(`Drive API ${res.status}: ${body.slice(0, 200)}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
   }
-  return res.json();
 }
+
+function str(v) { return (v != null && v !== '') ? String(v) : undefined; }
 
 function mapFile(f) {
   return {
     id: f.id,
-    title: f.name,
-    mimeType: f.mimeType,
-    modifiedTime: f.modifiedTime,
-    createdTime: f.createdTime,
-    viewUrl: f.webViewLink,
-    owner: f.owners?.[0]?.emailAddress,
+    title: str(f.name),
+    mimeType: str(f.mimeType),
+    modifiedTime: str(f.modifiedTime),
+    createdTime: str(f.createdTime),
+    viewUrl: str(f.webViewLink),
+    owner: str(f.owners?.[0]?.emailAddress),
     fileSize: f.size ? String(f.size) : undefined,
-    fileExtension: f.fileExtension,
-    parentId: f.parents?.[0],
-    description: f.description,
+    fileExtension: str(f.fileExtension),
+    parentId: str(f.parents?.[0]),
+    description: str(f.description),
     canAddChildren: false
   };
 }
@@ -150,18 +160,16 @@ app.post('/', async (req, res) => {
   if (method === 'tools/call') {
     const auth = req.headers.authorization || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    const toolName = params?.name;
+    const args = params?.arguments || {};
+    console.log('TOOL CALL:', toolName, JSON.stringify(args));
 
     if (!token) {
-      // Return empty result (not error) so agent retries with auth rather than giving up
-      const toolName = params?.name;
       if (toolName === 'search_files' || toolName === 'list_recent_files') {
         return res.json(mcpResult(id, { files: [] }));
       }
       return res.json(mcpResult(id, { fileContent: '' }));
     }
-
-    const toolName = params?.name;
-    const args = params?.arguments || {};
 
     try {
       let result;

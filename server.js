@@ -126,6 +126,8 @@ function mcpResult(id, data, isError = false) {
   return { jsonrpc: '2.0', id, result };
 }
 
+app.get('/health', (req, res) => res.json({ status: 'ok', server: 'gdrive-mcp' }));
+
 app.post('/', async (req, res) => {
   const body = req.body || {};
   console.log('INCOMING:', JSON.stringify({ method: body.method, params: body.params, headers: { authorization: req.headers.authorization ? 'Bearer ***' : 'NONE' } }));
